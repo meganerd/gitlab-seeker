@@ -1,0 +1,31 @@
+# Binaries
+gitlab-python-scanner
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Go build artifacts
+*.test
+*.out
+vendor/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Beads database (option: commit or ignore based on preference)
+# .beads/*.db
+
+# Beads JSONL exports are committed for team sync
+# .beads/*.jsonl should be committed

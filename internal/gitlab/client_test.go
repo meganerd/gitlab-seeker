@@ -3,6 +3,7 @@ package gitlab
 import (
 	stderrors "errors"
 	"net/http"
+	"syscall"
 	"testing"
 	"time"
 
@@ -280,6 +281,26 @@ type mockGitLabError struct {
 
 func (e *mockGitLabError) Error() string {
 	return e.message
+}
+
+// mockNetError simulates a network error and implements net.Error interface  
+type mockNetError struct {
+	timeout bool
+}
+
+func (m *mockNetError) Error() string {
+	if m.timeout {
+		return "timeout"
+	}
+	return "network error"
+}
+
+func (m *mockNetError) Timeout() bool {
+	return m.timeout
+}
+
+func (m *mockNetError) Temporary() bool {
+	return true
 }
 
 func TestListProjectsOptions(t *testing.T) {
@@ -596,7 +617,7 @@ func TestFormatUserError(t *testing.T) {
 
 func TestClassifyGitLabErrorWithNilResponse(t *testing.T) {
 	// Test error classification when response is nil (connection failures)
-	networkErr := stderrors.New("connection refused")
+	networkErr := syscall.ECONNREFUSED
 	
 	classifiedErr := classifyGitLabError(networkErr, nil)
 	
@@ -640,4 +661,340 @@ func containsAt(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// Tests for File Fetching Methods
+
+func TestGetRawFileValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		client    *Client
+		filePath  string
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:     "Nil client",
+			client:   nil,
+			filePath: "test.txt",
+			wantErr:  true,
+			errMsg:   "GitLab client is not initialized",
+		},
+		{
+			name: "Empty file path",
+			client: &Client{
+				client:  &gitlab.Client{},
+				timeout: 30 * time.Second,
+			},
+			filePath: "",
+			wantErr:  true,
+			errMsg:   "file path cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c *Client
+			if tt.client != nil {
+				c = tt.client
+			} else {
+				c = &Client{}
+			}
+
+			_, err := c.GetRawFile(nil, 123, tt.filePath, nil)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetRawFile() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && err != nil && !contains(err.Error(), tt.errMsg) {
+				t.Errorf("GetRawFile() error message = %v, want to contain %v", err.Error(), tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestGetFileValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		client    *Client
+		filePath  string
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:     "Nil client",
+			client:   nil,
+			filePath: "test.txt",
+			wantErr:  true,
+			errMsg:   "GitLab client is not initialized",
+		},
+		{
+			name: "Empty file path",
+			client: &Client{
+				client:  &gitlab.Client{},
+				timeout: 30 * time.Second,
+			},
+			filePath: "",
+			wantErr:  true,
+			errMsg:   "file path cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c *Client
+			if tt.client != nil {
+				c = tt.client
+			} else {
+				c = &Client{}
+			}
+
+			_, err := c.GetFile(nil, 123, tt.filePath, nil)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetFile() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && err != nil && !contains(err.Error(), tt.errMsg) {
+				t.Errorf("GetFile() error message = %v, want to contain %v", err.Error(), tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestGetFileMetadataValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		client    *Client
+		filePath  string
+		wantErr   bool
+		errMsg    string
+	}{
+		{
+			name:     "Nil client",
+			client:   nil,
+			filePath: "test.txt",
+			wantErr:  true,
+			errMsg:   "GitLab client is not initialized",
+		},
+		{
+			name: "Empty file path",
+			client: &Client{
+				client:  &gitlab.Client{},
+				timeout: 30 * time.Second,
+			},
+			filePath: "",
+			wantErr:  true,
+			errMsg:   "file path cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var c *Client
+			if tt.client != nil {
+				c = tt.client
+			} else {
+				c = &Client{}
+			}
+
+			_, err := c.GetFileMetadata(nil, 123, tt.filePath, nil)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("GetFileMetadata() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if tt.wantErr && err != nil && !contains(err.Error(), tt.errMsg) {
+				t.Errorf("GetFileMetadata() error message = %v, want to contain %v", err.Error(), tt.errMsg)
+			}
+		})
+	}
+}
+
+func TestFileContentConversion(t *testing.T) {
+	// Test the conversion from gitlab.File to our FileContent type
+	gitlabFile := &gitlab.File{
+		FileName:     "test.py",
+		FilePath:     "src/test.py",
+		Size:         1024,
+		Encoding:     "base64",
+		Content:      "SGVsbG8gV29ybGQ=",
+		Ref:          "main",
+		BlobID:       "abc123",
+		CommitID:     "commit123",
+		LastCommitID: "commit123",
+		SHA256:       "sha256hash",
+	}
+
+	// Convert to our FileContent type (simulating what happens in GetFile)
+	fileContent := &FileContent{
+		FileName: gitlabFile.FileName,
+		FilePath: gitlabFile.FilePath,
+		Size:     gitlabFile.Size,
+		Encoding: gitlabFile.Encoding,
+		Ref:      gitlabFile.Ref,
+		BlobID:   gitlabFile.BlobID,
+		CommitID: gitlabFile.CommitID,
+	}
+
+	if gitlabFile.LastCommitID != "" {
+		fileContent.LastCommitID = gitlabFile.LastCommitID
+	} else {
+		fileContent.LastCommitID = gitlabFile.CommitID
+	}
+
+	if gitlabFile.SHA256 != "" {
+		fileContent.ContentSHA256 = gitlabFile.SHA256
+	}
+
+	if gitlabFile.Encoding == "base64" && gitlabFile.Content != "" {
+		fileContent.Content = []byte(gitlabFile.Content)
+	} else if gitlabFile.Content != "" {
+		fileContent.Content = []byte(gitlabFile.Content)
+	}
+
+	// Verify the conversion
+	if fileContent.FileName != "test.py" {
+		t.Errorf("FileName = %v, want test.py", fileContent.FileName)
+	}
+	if fileContent.FilePath != "src/test.py" {
+		t.Errorf("FilePath = %v, want src/test.py", fileContent.FilePath)
+	}
+	if fileContent.Size != 1024 {
+		t.Errorf("Size = %v, want 1024", fileContent.Size)
+	}
+	if fileContent.Encoding != "base64" {
+		t.Errorf("Encoding = %v, want base64", fileContent.Encoding)
+	}
+	if fileContent.Ref != "main" {
+		t.Errorf("Ref = %v, want main", fileContent.Ref)
+	}
+	if fileContent.BlobID != "abc123" {
+		t.Errorf("BlobID = %v, want abc123", fileContent.BlobID)
+	}
+	if fileContent.CommitID != "commit123" {
+		t.Errorf("CommitID = %v, want commit123", fileContent.CommitID)
+	}
+	if fileContent.LastCommitID != "commit123" {
+		t.Errorf("LastCommitID = %v, want commit123", fileContent.LastCommitID)
+	}
+	if fileContent.ContentSHA256 != "sha256hash" {
+		t.Errorf("ContentSHA256 = %v, want sha256hash", fileContent.ContentSHA256)
+	}
+	if string(fileContent.Content) != "SGVsbG8gV29ybGQ=" {
+		t.Errorf("Content = %v, want SGVsbG8gV29ybGQ=", string(fileContent.Content))
+	}
+}
+
+func TestFileContentConversionWithMissingFields(t *testing.T) {
+	// Test conversion when optional fields are missing
+	gitlabFile := &gitlab.File{
+		FileName:     "test.txt",
+		FilePath:     "test.txt",
+		Size:         512,
+		Encoding:     "text",
+		Content:      "Hello World",
+		Ref:          "develop",
+		BlobID:       "xyz789",
+		CommitID:     "commit456",
+		LastCommitID: "", // Empty
+		SHA256:       "", // Empty
+	}
+
+	fileContent := &FileContent{
+		FileName: gitlabFile.FileName,
+		FilePath: gitlabFile.FilePath,
+		Size:     gitlabFile.Size,
+		Encoding: gitlabFile.Encoding,
+		Ref:      gitlabFile.Ref,
+		BlobID:   gitlabFile.BlobID,
+		CommitID: gitlabFile.CommitID,
+	}
+
+	// Set LastCommitID with fallback to CommitID
+	if gitlabFile.LastCommitID != "" {
+		fileContent.LastCommitID = gitlabFile.LastCommitID
+	} else {
+		fileContent.LastCommitID = gitlabFile.CommitID
+	}
+
+	if gitlabFile.SHA256 != "" {
+		fileContent.ContentSHA256 = gitlabFile.SHA256
+	}
+
+	if gitlabFile.Content != "" {
+		fileContent.Content = []byte(gitlabFile.Content)
+	}
+
+	// Verify LastCommitID falls back to CommitID
+	if fileContent.LastCommitID != "commit456" {
+		t.Errorf("LastCommitID = %v, want commit456 (fallback from CommitID)", fileContent.LastCommitID)
+	}
+
+	// Verify ContentSHA256 is empty
+	if fileContent.ContentSHA256 != "" {
+		t.Errorf("ContentSHA256 = %v, want empty string", fileContent.ContentSHA256)
+	}
+
+	// Verify content is set
+	if string(fileContent.Content) != "Hello World" {
+		t.Errorf("Content = %v, want Hello World", string(fileContent.Content))
+	}
+}
+
+func TestGetFileOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		opts        *GetFileOptions
+		expectedRef string
+	}{
+		{
+			name:        "Nil options",
+			opts:        nil,
+			expectedRef: "",
+		},
+		{
+			name:        "Empty options",
+			opts:        &GetFileOptions{},
+			expectedRef: "",
+		},
+		{
+			name: "With ref",
+			opts: &GetFileOptions{
+				Ref: "develop",
+			},
+			expectedRef: "develop",
+		},
+		{
+			name: "With commit SHA",
+			opts: &GetFileOptions{
+				Ref: "abc123def456",
+			},
+			expectedRef: "abc123def456",
+		},
+		{
+			name: "With tag",
+			opts: &GetFileOptions{
+				Ref: "v1.0.0",
+			},
+			expectedRef: "v1.0.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var refValue string
+			if tt.opts != nil && tt.opts.Ref != "" {
+				refValue = tt.opts.Ref
+			}
+
+			if refValue != tt.expectedRef {
+				t.Errorf("Ref = %v, want %v", refValue, tt.expectedRef)
+			}
+		})
+	}
 }

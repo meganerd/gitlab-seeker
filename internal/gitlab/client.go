@@ -534,8 +534,8 @@ func (c *Client) GetFile(ctx context.Context, projectID interface{}, filePath st
 	}
 
 	// Set ContentSHA256 if available
-	if gitlabFile.ContentSHA256 != "" {
-		fileContent.ContentSHA256 = gitlabFile.ContentSHA256
+	if gitlabFile.SHA256 != "" {
+		fileContent.ContentSHA256 = gitlabFile.SHA256
 	}
 
 	// Decode the content if it's base64 encoded
@@ -631,8 +631,8 @@ func (c *Client) GetFileMetadata(ctx context.Context, projectID interface{}, fil
 	}
 
 	// Set ContentSHA256 if available
-	if gitlabFile.ContentSHA256 != "" {
-		fileContent.ContentSHA256 = gitlabFile.ContentSHA256
+	if gitlabFile.SHA256 != "" {
+		fileContent.ContentSHA256 = gitlabFile.SHA256
 	}
 
 	// Note: Content is intentionally not populated for metadata-only requests

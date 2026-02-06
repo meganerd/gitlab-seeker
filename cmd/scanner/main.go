@@ -4,6 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/gbjohnso/gitlab-python-scanner/internal/gitlab"
 )
 
 // Config holds the application configuration
@@ -26,14 +29,42 @@ func main() {
 		os.Exit(1)
 	}
 
-	// TODO: Implement scanning logic
 	fmt.Printf("GitLab Python Version Scanner\n")
 	fmt.Printf("==============================\n\n")
 	fmt.Printf("Scanning: %s\n", config.GitLabURL)
 	if config.LogFile != "" {
 		fmt.Printf("Logging to: %s\n", config.LogFile)
 	}
-	fmt.Println("\nScanning not yet implemented - see tasks with: bd ready")
+	fmt.Println()
+
+	// Create GitLab client
+	gitlabConfig := &gitlab.Config{
+		GitLabURL: config.GitLabURL,
+		Token:     config.Token,
+		Timeout:   time.Duration(config.Timeout) * time.Second,
+	}
+
+	client, err := gitlab.NewClient(gitlabConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating GitLab client: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("GitLab Base URL: %s\n", client.GetBaseURL())
+	fmt.Printf("Organization: %s\n", client.GetOrganization())
+	fmt.Println()
+
+	// Test the connection
+	fmt.Println("Testing GitLab connection...")
+	if err := client.TestConnection(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✓ Successfully connected to GitLab")
+	fmt.Println()
+
+	// TODO: Implement scanning logic
+	fmt.Println("Scanning not yet implemented - see tasks with: bd ready")
 }
 
 func parseFlags() *Config {

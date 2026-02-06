@@ -1,4 +1,4 @@
-{"gitlab_url":"https://gitlab.com/myorg","timestamp":"2026-02-06T08:32:46-07:00","total_projects":2,"type":"scan_started"}
-{"timestamp":"2026-02-06T08:32:46.408545887-07:00","project_name":"backend-api","project_path":"/projects/backend-api","python_version":"3.11.5","detection_source":".python-version","index":1,"total_projects":2}
-{"timestamp":"2026-02-06T08:32:46.40855276-07:00","project_name":"frontend-app","project_path":"/projects/frontend-app","index":2,"total_projects":2}
-{"error_count":0,"non_python_projects":1,"python_projects":1,"timestamp":"2026-02-06T08:32:46-07:00","total_projects":2,"type":"scan_completed","version_counts":{}}
+{"gitlab_url":"https://gitlab.com/myorg","timestamp":"2026-02-06T09:20:42-07:00","total_projects":2,"type":"scan_started"}
+{"timestamp":"2026-02-06T09:20:42.404629532-07:00","project_name":"backend-api","project_path":"/projects/backend-api","python_version":"3.11.5","detection_source":".python-version","index":1,"total_projects":2}
+{"timestamp":"2026-02-06T09:20:42.404636896-07:00","project_name":"frontend-app","project_path":"/projects/frontend-app","index":2,"total_projects":2}
+{"error_count":0,"non_python_projects":1,"python_projects":1,"timestamp":"2026-02-06T09:20:42-07:00","total_projects":2,"type":"scan_completed","version_counts":{}}

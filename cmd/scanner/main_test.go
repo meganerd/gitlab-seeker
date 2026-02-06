@@ -166,8 +166,8 @@ func TestParseFlags(t *testing.T) {
 			// Set command line args
 			os.Args = tt.args
 
-			// Parse flags
-			config := parseFlags()
+			// Parse flags (skip program name in args)
+			config := parseScanFlags(tt.args[1:])
 
 			// Verify results
 			if config.GitLabURL != tt.wantURL {
@@ -235,10 +235,107 @@ func TestParseFlagsTokenPriority(t *testing.T) {
 	// Set command line args with explicit token
 	os.Args = []string{"cmd", "--url", "gitlab.com/test", "--token", "cli-token"}
 
-	config := parseFlags()
+	config := parseScanFlags(os.Args[1:])
 
 	// CLI token should take priority
 	if config.Token != "cli-token" {
 		t.Errorf("Token = %v, want cli-token (CLI should override env)", config.Token)
+	}
+}
+
+func TestParseSearchFlags(t *testing.T) {
+	tests := []struct {
+		name          string
+		args          []string
+		wantSearch    string
+		wantRegex     bool
+		wantFiles     int
+		wantCaseSens  bool
+		wantContext   int
+	}{
+		{
+			name:       "basic search",
+			args:       []string{"--url", "gitlab.com/org", "--token", "abc", "--search", "API_KEY"},
+			wantSearch: "API_KEY",
+		},
+		{
+			name:       "regex search with file patterns",
+			args:       []string{"--url", "gitlab.com/org", "--token", "abc", "--search", "password\\s*=", "--regex", "--file", "*.py", "--file", "*.yml"},
+			wantSearch: "password\\s*=",
+			wantRegex:  true,
+			wantFiles:  2,
+		},
+		{
+			name:         "case sensitive with context",
+			args:         []string{"--url", "gitlab.com/org", "--token", "abc", "--search", "TODO", "--case-sensitive", "--context", "3"},
+			wantSearch:   "TODO",
+			wantCaseSens: true,
+			wantContext:  3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := parseSearchFlags(tt.args)
+
+			if config.SearchTerm != tt.wantSearch {
+				t.Errorf("SearchTerm = %q, want %q", config.SearchTerm, tt.wantSearch)
+			}
+			if config.IsRegex != tt.wantRegex {
+				t.Errorf("IsRegex = %v, want %v", config.IsRegex, tt.wantRegex)
+			}
+			if len(config.FilePatterns) != tt.wantFiles {
+				t.Errorf("FilePatterns count = %d, want %d", len(config.FilePatterns), tt.wantFiles)
+			}
+			if config.CaseSensitive != tt.wantCaseSens {
+				t.Errorf("CaseSensitive = %v, want %v", config.CaseSensitive, tt.wantCaseSens)
+			}
+			if config.ContextLines != tt.wantContext {
+				t.Errorf("ContextLines = %d, want %d", config.ContextLines, tt.wantContext)
+			}
+		})
+	}
+}
+
+func TestValidateSearchConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *SearchConfig
+		wantErr bool
+	}{
+		{
+			name:    "valid with search term",
+			config:  &SearchConfig{GitLabURL: "gitlab.com/org", Token: "tok", SearchTerm: "test"},
+			wantErr: false,
+		},
+		{
+			name:    "valid with config file",
+			config:  &SearchConfig{GitLabURL: "gitlab.com/org", Token: "tok", ConfigFile: "config.yaml"},
+			wantErr: false,
+		},
+		{
+			name:    "missing url",
+			config:  &SearchConfig{Token: "tok", SearchTerm: "test"},
+			wantErr: true,
+		},
+		{
+			name:    "missing token",
+			config:  &SearchConfig{GitLabURL: "gitlab.com/org", SearchTerm: "test"},
+			wantErr: true,
+		},
+		{
+			name:    "missing search and config",
+			config:  &SearchConfig{GitLabURL: "gitlab.com/org", Token: "tok"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSearchConfig(tt.config)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateSearchConfig() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }

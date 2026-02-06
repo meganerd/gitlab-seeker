@@ -1,0 +1,29 @@
+# Content Search Configuration
+# Use with: scanner search --url gitlab.com/myorg --token TOKEN --config content-search.yaml
+
+version: "1.0"
+
+searches:
+  - name: find-hardcoded-secrets
+    description: Search for potential hardcoded API keys and passwords
+    search_term: '(?i)(api_key|api_secret|password)\s*=\s*[''"][^''"]+[''"]'
+    is_regex: true
+    file_patterns:
+      - "*.py"
+      - "*.yml"
+      - "*.yaml"
+      - "*.env"
+    context_lines: 1
+
+  - name: find-todo-comments
+    description: Search for TODO comments across all files
+    search_term: "TODO"
+    case_sensitive: true
+
+  - name: find-deprecated-imports
+    description: Search for deprecated library imports in Python files
+    search_term: 'from\s+deprecated_module\s+import'
+    is_regex: true
+    file_patterns:
+      - "*.py"
+    max_matches: 50

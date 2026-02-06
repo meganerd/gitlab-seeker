@@ -133,6 +133,7 @@ func TestDefaultParserRegistry_ListParserTypes(t *testing.T) {
 		"pyproject_toml":  true,
 		"regex":           true,
 		"simple_version":  true,
+		"string_search":   true,
 	}
 
 	if len(types) != len(expectedTypes) {

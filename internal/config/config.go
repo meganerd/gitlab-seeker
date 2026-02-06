@@ -60,13 +60,46 @@ type ParserConfig struct {
 	Config map[string]interface{} `yaml:"config,omitempty" json:"config,omitempty"`
 }
 
+// SearchConfigEntry represents a content search definition in YAML/JSON config
+type SearchConfigEntry struct {
+	// Name is a unique identifier for this search
+	Name string `yaml:"name" json:"name"`
+
+	// Description provides human-readable information
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+
+	// SearchTerm is the string or regex pattern to search for
+	SearchTerm string `yaml:"search_term" json:"search_term"`
+
+	// IsRegex indicates whether SearchTerm is a regex pattern
+	IsRegex bool `yaml:"is_regex,omitempty" json:"is_regex,omitempty"`
+
+	// CaseSensitive enables case-sensitive matching
+	CaseSensitive bool `yaml:"case_sensitive,omitempty" json:"case_sensitive,omitempty"`
+
+	// FilePatterns restricts search to files matching these glob patterns
+	FilePatterns []string `yaml:"file_patterns,omitempty" json:"file_patterns,omitempty"`
+
+	// ContextLines is the number of context lines around each match
+	ContextLines int `yaml:"context_lines,omitempty" json:"context_lines,omitempty"`
+
+	// MaxMatches limits the number of matches per project (0 = unlimited)
+	MaxMatches int `yaml:"max_matches,omitempty" json:"max_matches,omitempty"`
+
+	// Enabled indicates if this search is active (default true)
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
 // Config represents the complete configuration file structure
 type Config struct {
 	// Version of the config file format
 	Version string `yaml:"version,omitempty" json:"version,omitempty"`
 
-	// Rules defines the search rules
-	Rules []RuleConfig `yaml:"rules" json:"rules"`
+	// Rules defines the search rules for Python version scanning
+	Rules []RuleConfig `yaml:"rules,omitempty" json:"rules,omitempty"`
+
+	// Searches defines content search configurations
+	Searches []SearchConfigEntry `yaml:"searches,omitempty" json:"searches,omitempty"`
 
 	// Settings contains global configuration
 	Settings SettingsConfig `yaml:"settings,omitempty" json:"settings,omitempty"`
@@ -300,46 +333,71 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("config version is required")
 	}
 
-	if len(c.Rules) == 0 {
-		return fmt.Errorf("at least one rule is required")
+	if len(c.Rules) == 0 && len(c.Searches) == 0 {
+		return fmt.Errorf("at least one rule or search is required")
 	}
 
-	// Check for duplicate rule names
+	if err := c.validateSearches(); err != nil {
+		return err
+	}
+
+	return c.validateRules()
+}
+
+func (c *Config) validateSearches() error {
+	names := make(map[string]bool)
+	for i, search := range c.Searches {
+		if search.Name == "" {
+			return fmt.Errorf("search %d: name is required", i)
+		}
+		if names[search.Name] {
+			return fmt.Errorf("duplicate search name: %s", search.Name)
+		}
+		names[search.Name] = true
+		if search.SearchTerm == "" {
+			return fmt.Errorf("search %s: search_term is required", search.Name)
+		}
+		if search.IsRegex {
+			if _, err := regexp.Compile(search.SearchTerm); err != nil {
+				return fmt.Errorf("search %s: invalid regex search_term: %w", search.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateRules() error {
+	if len(c.Rules) == 0 {
+		return nil
+	}
+
 	names := make(map[string]bool)
 	for i, rule := range c.Rules {
 		if rule.Name == "" {
 			return fmt.Errorf("rule %d: name is required", i)
 		}
-
 		if names[rule.Name] {
 			return fmt.Errorf("duplicate rule name: %s", rule.Name)
 		}
 		names[rule.Name] = true
 
-		// Validate match conditions
 		if rule.Match.FilePattern == "" && rule.Match.PathPattern == "" {
 			return fmt.Errorf("rule %s: at least one match condition (file_pattern or path_pattern) is required", rule.Name)
 		}
-
-		// Validate regex patterns
 		if rule.Match.PathPattern != "" {
 			if _, err := regexp.Compile(rule.Match.PathPattern); err != nil {
 				return fmt.Errorf("rule %s: invalid path_pattern: %w", rule.Name, err)
 			}
 		}
-
 		if rule.Match.RequiredContent != "" {
 			if _, err := regexp.Compile(rule.Match.RequiredContent); err != nil {
 				return fmt.Errorf("rule %s: invalid required_content: %w", rule.Name, err)
 			}
 		}
-
-		// Validate parser
 		if rule.Parser.Type == "" {
 			return fmt.Errorf("rule %s: parser type is required", rule.Name)
 		}
 	}
-
 	return nil
 }
 

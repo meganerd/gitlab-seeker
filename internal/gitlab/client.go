@@ -1,11 +1,15 @@
 package gitlab
 
 import (
+	"context"
+	stderrors "errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	apperrors "github.com/gbjohnso/gitlab-python-scanner/internal/errors"
 	"github.com/xanzy/go-gitlab"
 )
 
@@ -100,21 +104,100 @@ func parseGitLabURL(gitlabURL string) (baseURL, organization string, err error) 
 
 // TestConnection verifies that the client can connect to GitLab and authenticate
 func (c *Client) TestConnection() error {
+	return c.TestConnectionWithContext(context.Background())
+}
+
+// TestConnectionWithContext verifies that the client can connect to GitLab and authenticate
+// with context support for timeout and cancellation
+func (c *Client) TestConnectionWithContext(ctx context.Context) error {
 	if c.client == nil {
 		return fmt.Errorf("GitLab client is not initialized")
 	}
 
-	// Try to get the current user to verify authentication
-	_, resp, err := c.client.Users.CurrentUser()
-	if err != nil {
-		// Check if it's an authentication error
-		if resp != nil && resp.StatusCode == 401 {
-			return fmt.Errorf("authentication failed: invalid token")
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	// Configure retry for network failures
+	retryConfig := &apperrors.RetryConfig{
+		MaxAttempts:  3,
+		InitialDelay: 1 * time.Second,
+		MaxDelay:     10 * time.Second,
+		Multiplier:   2.0,
+		ShouldRetry: func(err error) bool {
+			return apperrors.IsRetryable(err)
+		},
+	}
+
+	var lastResp *gitlab.Response
+	err := apperrors.RetryWithBackoff(ctx, retryConfig, func() error {
+		// Try to get the current user to verify authentication
+		_, resp, err := c.client.Users.CurrentUser()
+		lastResp = resp
+		if err != nil {
+			return classifyGitLabError(err, resp)
 		}
-		return fmt.Errorf("failed to connect to GitLab: %w", err)
+		return nil
+	})
+
+	if err != nil {
+		// Provide user-friendly error messages
+		return c.formatUserError(err, lastResp)
 	}
 
 	return nil
+}
+
+// classifyGitLabError analyzes a GitLab API error and returns an appropriate AppError
+func classifyGitLabError(err error, resp *gitlab.Response) error {
+	if err == nil {
+		return nil
+	}
+
+	// Check HTTP response status codes
+	if resp != nil {
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return apperrors.NewAuthenticationError(err)
+		case http.StatusForbidden:
+			return apperrors.NewPermissionError("GitLab API access")
+		case http.StatusNotFound:
+			return apperrors.NewNotFoundError("GitLab resource")
+		case http.StatusTooManyRequests:
+			return apperrors.NewRateLimitError(err)
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return apperrors.NewNetworkError(err)
+		}
+	}
+
+	// Classify the underlying error
+	return apperrors.ClassifyError(err)
+}
+
+// formatUserError formats an error for user-friendly display
+func (c *Client) formatUserError(err error, resp *gitlab.Response) error {
+	var appErr *apperrors.AppError
+	if !stderrors.As(err, &appErr) {
+		return err
+	}
+
+	switch appErr.Type {
+	case apperrors.ErrorTypeAuthentication:
+		return fmt.Errorf("authentication failed: please check your GitLab token")
+	case apperrors.ErrorTypeNetwork:
+		if resp != nil && resp.StatusCode >= 500 {
+			return fmt.Errorf("GitLab server error (HTTP %d): the server may be experiencing issues. Please try again later", resp.StatusCode)
+		}
+		return fmt.Errorf("network error: unable to reach GitLab server. Please check your internet connection and the GitLab URL")
+	case apperrors.ErrorTypeTimeout:
+		return fmt.Errorf("connection timeout: GitLab server did not respond within %v. Please check your network or try increasing the timeout", c.timeout)
+	case apperrors.ErrorTypeRateLimit:
+		return fmt.Errorf("rate limit exceeded: too many requests to GitLab API. Please wait a moment before trying again")
+	case apperrors.ErrorTypePermission:
+		return fmt.Errorf("permission denied: your GitLab token does not have sufficient permissions")
+	default:
+		return err
+	}
 }
 
 // GetOrganization returns the organization/group path

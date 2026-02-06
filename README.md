@@ -4,23 +4,23 @@ A Go CLI tool to scan GitLab projects and detect Python versions across an organ
 
 ## Features
 
-- 🔍 Scans all projects in a GitLab group/organization
-- 🐍 Detects Python versions from common files (.python-version, pyproject.toml, etc.)
-- 📊 Real-time console output as projects are scanned
-- 📝 Optional log file output
-- ⚡ Concurrent scanning for performance
-- 🔐 GitLab API authentication support
+- Scans all projects in a GitLab group/organization
+- Detects Python versions from common files (.python-version, pyproject.toml, etc.)
+- Real-time console output as projects are scanned
+- Optional log file output
+- Concurrent scanning for performance
+- GitLab API authentication support
 
 ## Installation
 
 ```bash
-go install github.com/gbjohnso/gitlab-python-scanner@latest
+go install github.com/meganerd/gitlab-python-scanner@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/gbjohnso/gitlab-python-scanner
+git clone https://github.com/meganerd/gitlab-python-scanner
 cd gitlab-python-scanner
 go build -o gitlab-python-scanner
 ```

@@ -32,6 +32,7 @@ func NewDefaultParserRegistry() *DefaultParserRegistry {
 
 	registry.RegisterParser("regex", createRegexParser)
 	registry.RegisterParser("simple_version", createSimpleVersionParser)
+	registry.RegisterParser("string_search", createStringSearchParser)
 
 	return registry
 }
@@ -141,6 +142,38 @@ func createSimpleVersionParser(config map[string]interface{}) (rules.ParserFunc,
 			RawValue:   version,
 		}, nil
 	}, nil
+}
+
+// createStringSearchParser creates a parser that searches for arbitrary strings/regex in file content
+func createStringSearchParser(config map[string]interface{}) (rules.ParserFunc, error) {
+	searchTerm, ok := config["search_term"].(string)
+	if !ok || searchTerm == "" {
+		return nil, fmt.Errorf("string_search parser requires 'search_term' string in config")
+	}
+
+	isRegex := false
+	if v, ok := config["is_regex"].(bool); ok {
+		isRegex = v
+	}
+
+	caseSensitive := false
+	if v, ok := config["case_sensitive"].(bool); ok {
+		caseSensitive = v
+	}
+
+	maxMatches := 0
+	if v, ok := config["max_matches"].(float64); ok {
+		maxMatches = int(v)
+	}
+
+	parser := &parsers.StringSearchParser{
+		SearchTerm:    searchTerm,
+		IsRegex:       isRegex,
+		CaseSensitive: caseSensitive,
+		MaxMatches:    maxMatches,
+	}
+
+	return parser.AsParserFunc(), nil
 }
 
 // ListParserTypes returns a list of all registered parser types

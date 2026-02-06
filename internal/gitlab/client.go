@@ -660,3 +660,279 @@ func (c *Client) GetFileMetadata(ctx context.Context, projectID interface{}, fil
 
 	return fileContent, nil
 }
+
+// BlobMatch represents a single search match in a file
+type BlobMatch struct {
+	Filename  string // Name of the file containing the match
+	Path      string // Full path of the file in the repository
+	Data      string // Snippet of content around the match
+	Startline int    // Starting line number of the snippet
+	Ref       string // Git reference where the match was found
+	ProjectID int    // ID of the project containing the match
+}
+
+// TreeFile represents a file in a repository tree
+type TreeFile struct {
+	Name string // File name
+	Path string // Full path in the repository
+}
+
+// SearchBlobsOptions contains options for blob search operations
+type SearchBlobsOptions struct {
+	Ref     string // Git reference to search (empty = default branch)
+	PerPage int    // Results per page (default 20, max 100)
+}
+
+// ListTreeOptions contains options for listing repository tree
+type ListTreeOptions struct {
+	Ref       string // Git reference (empty = default branch)
+	Path      string // Subdirectory path to list (empty = root)
+	Recursive bool   // Whether to list recursively
+	PerPage   int    // Results per page (default 20, max 100)
+}
+
+// SearchBlobs searches for a string in a project's repository files using the GitLab Search API
+func (c *Client) SearchBlobs(ctx context.Context, projectID interface{}, query string, opts *SearchBlobsOptions) ([]*BlobMatch, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("GitLab client is not initialized")
+	}
+	if query == "" {
+		return nil, fmt.Errorf("search query cannot be empty")
+	}
+
+	if opts == nil {
+		opts = &SearchBlobsOptions{}
+	}
+	perPage := opts.PerPage
+	if perPage == 0 {
+		perPage = 20
+	}
+	if perPage > 100 {
+		perPage = 100
+	}
+
+	searchOpts := &gitlab.SearchOptions{
+		ListOptions: gitlab.ListOptions{
+			PerPage: perPage,
+			Page:    1,
+		},
+	}
+	if opts.Ref != "" {
+		searchOpts.Ref = gitlab.Ptr(opts.Ref)
+	}
+
+	retryConfig := &apperrors.RetryConfig{
+		MaxAttempts:  3,
+		InitialDelay: 1 * time.Second,
+		MaxDelay:     10 * time.Second,
+		Multiplier:   2.0,
+		ShouldRetry: func(err error) bool {
+			return apperrors.IsRetryable(err)
+		},
+	}
+
+	var allMatches []*BlobMatch
+
+	for {
+		var blobs []*gitlab.Blob
+		var resp *gitlab.Response
+
+		pageCtx, cancel := context.WithTimeout(ctx, c.timeout)
+
+		err := apperrors.RetryWithBackoff(pageCtx, retryConfig, func() error {
+			var err error
+			blobs, resp, err = c.client.Search.BlobsByProject(projectID, query, searchOpts, gitlab.WithContext(pageCtx))
+			if err != nil {
+				return classifyGitLabError(err, resp)
+			}
+			return nil
+		})
+		cancel()
+
+		if err != nil {
+			return nil, c.formatUserError(err, resp)
+		}
+
+		for _, blob := range blobs {
+			allMatches = append(allMatches, &BlobMatch{
+				Filename:  blob.Filename,
+				Path:      blob.Path,
+				Data:      blob.Data,
+				Startline: blob.Startline,
+				Ref:       blob.Ref,
+				ProjectID: blob.ProjectID,
+			})
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		searchOpts.Page = resp.NextPage
+	}
+
+	return allMatches, nil
+}
+
+// SearchBlobsByGroup searches for a string across all projects in a group
+func (c *Client) SearchBlobsByGroup(ctx context.Context, groupID interface{}, query string, opts *SearchBlobsOptions) ([]*BlobMatch, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("GitLab client is not initialized")
+	}
+	if query == "" {
+		return nil, fmt.Errorf("search query cannot be empty")
+	}
+
+	if opts == nil {
+		opts = &SearchBlobsOptions{}
+	}
+	perPage := opts.PerPage
+	if perPage == 0 {
+		perPage = 20
+	}
+	if perPage > 100 {
+		perPage = 100
+	}
+
+	searchOpts := &gitlab.SearchOptions{
+		ListOptions: gitlab.ListOptions{
+			PerPage: perPage,
+			Page:    1,
+		},
+	}
+	if opts.Ref != "" {
+		searchOpts.Ref = gitlab.Ptr(opts.Ref)
+	}
+
+	retryConfig := &apperrors.RetryConfig{
+		MaxAttempts:  3,
+		InitialDelay: 1 * time.Second,
+		MaxDelay:     10 * time.Second,
+		Multiplier:   2.0,
+		ShouldRetry: func(err error) bool {
+			return apperrors.IsRetryable(err)
+		},
+	}
+
+	var allMatches []*BlobMatch
+
+	for {
+		var blobs []*gitlab.Blob
+		var resp *gitlab.Response
+
+		pageCtx, cancel := context.WithTimeout(ctx, c.timeout)
+
+		err := apperrors.RetryWithBackoff(pageCtx, retryConfig, func() error {
+			var err error
+			blobs, resp, err = c.client.Search.BlobsByGroup(groupID, query, searchOpts, gitlab.WithContext(pageCtx))
+			if err != nil {
+				return classifyGitLabError(err, resp)
+			}
+			return nil
+		})
+		cancel()
+
+		if err != nil {
+			return nil, c.formatUserError(err, resp)
+		}
+
+		for _, blob := range blobs {
+			allMatches = append(allMatches, &BlobMatch{
+				Filename:  blob.Filename,
+				Path:      blob.Path,
+				Data:      blob.Data,
+				Startline: blob.Startline,
+				Ref:       blob.Ref,
+				ProjectID: blob.ProjectID,
+			})
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		searchOpts.Page = resp.NextPage
+	}
+
+	return allMatches, nil
+}
+
+// ListRepositoryTree lists files and directories in a repository
+func (c *Client) ListRepositoryTree(ctx context.Context, projectID interface{}, opts *ListTreeOptions) ([]*TreeFile, error) {
+	if c.client == nil {
+		return nil, fmt.Errorf("GitLab client is not initialized")
+	}
+
+	if opts == nil {
+		opts = &ListTreeOptions{}
+	}
+	perPage := opts.PerPage
+	if perPage == 0 {
+		perPage = 100
+	}
+	if perPage > 100 {
+		perPage = 100
+	}
+
+	treeOpts := &gitlab.ListTreeOptions{
+		ListOptions: gitlab.ListOptions{
+			PerPage: perPage,
+			Page:    1,
+		},
+		Recursive: gitlab.Ptr(opts.Recursive),
+	}
+	if opts.Ref != "" {
+		treeOpts.Ref = gitlab.Ptr(opts.Ref)
+	}
+	if opts.Path != "" {
+		treeOpts.Path = gitlab.Ptr(opts.Path)
+	}
+
+	retryConfig := &apperrors.RetryConfig{
+		MaxAttempts:  3,
+		InitialDelay: 1 * time.Second,
+		MaxDelay:     10 * time.Second,
+		Multiplier:   2.0,
+		ShouldRetry: func(err error) bool {
+			return apperrors.IsRetryable(err)
+		},
+	}
+
+	var allFiles []*TreeFile
+
+	for {
+		var nodes []*gitlab.TreeNode
+		var resp *gitlab.Response
+
+		pageCtx, cancel := context.WithTimeout(ctx, c.timeout)
+
+		err := apperrors.RetryWithBackoff(pageCtx, retryConfig, func() error {
+			var err error
+			nodes, resp, err = c.client.Repositories.ListTree(projectID, treeOpts, gitlab.WithContext(pageCtx))
+			if err != nil {
+				return classifyGitLabError(err, resp)
+			}
+			return nil
+		})
+		cancel()
+
+		if err != nil {
+			return nil, c.formatUserError(err, resp)
+		}
+
+		for _, node := range nodes {
+			// Only include files (blobs), not directories (trees)
+			if node.Type == "blob" {
+				allFiles = append(allFiles, &TreeFile{
+					Name: node.Name,
+					Path: node.Path,
+				})
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		treeOpts.Page = resp.NextPage
+	}
+
+	return allFiles, nil
+}

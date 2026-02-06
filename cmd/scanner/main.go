@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,9 +13,10 @@ import (
 	"github.com/gbjohnso/gitlab-python-scanner/internal/output"
 	"github.com/gbjohnso/gitlab-python-scanner/internal/parsers"
 	"github.com/gbjohnso/gitlab-python-scanner/internal/rules"
+	"github.com/gbjohnso/gitlab-python-scanner/internal/scanner"
 )
 
-// Config holds the application configuration
+// Config holds the application configuration for Python version scanning
 type Config struct {
 	GitLabURL   string
 	Token       string
@@ -23,11 +25,45 @@ type Config struct {
 	Timeout     int
 }
 
-func main() {
-	// Parse command-line flags
-	config := parseFlags()
+// SearchConfig holds the configuration for content string search
+type SearchConfig struct {
+	GitLabURL     string
+	Token         string
+	LogFile       string
+	Concurrency   int
+	Timeout       int
+	SearchTerm    string
+	IsRegex       bool
+	FilePatterns  []string
+	CaseSensitive bool
+	ContextLines  int
+}
 
-	// Validate required parameters
+// multiFlag allows a flag to be specified multiple times
+type multiFlag []string
+
+func (m *multiFlag) String() string { return strings.Join(*m, ", ") }
+func (m *multiFlag) Set(value string) error {
+	*m = append(*m, value)
+	return nil
+}
+
+func main() {
+	// Detect subcommand
+	if len(os.Args) > 1 && os.Args[1] == "search" {
+		runSearchCommand(os.Args[2:])
+		return
+	}
+
+	// Default: scan mode (backward compatible)
+	// If "scan" subcommand is given explicitly, skip it
+	args := os.Args[1:]
+	if len(os.Args) > 1 && os.Args[1] == "scan" {
+		args = os.Args[2:]
+	}
+
+	config := parseScanFlags(args)
+
 	if err := validateConfig(config); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		flag.Usage()
@@ -42,37 +78,161 @@ func main() {
 	}
 	fmt.Println()
 
-	// Create GitLab client
-	gitlabConfig := &gitlab.Config{
-		GitLabURL: config.GitLabURL,
-		Token:     config.Token,
-		Timeout:   time.Duration(config.Timeout) * time.Second,
-	}
-
-	client, err := gitlab.NewClient(gitlabConfig)
+	client, err := createClient(config.GitLabURL, config.Token, config.Timeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating GitLab client: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("GitLab Base URL: %s\n", client.GetBaseURL())
-	fmt.Printf("Organization: %s\n", client.GetOrganization())
-	fmt.Println()
+	printClientInfo(client)
 
-	// Test the connection
-	fmt.Println("Testing GitLab connection...")
-	if err := client.TestConnection(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("✓ Successfully connected to GitLab")
-	fmt.Println()
-
-	// Run the scan
 	if err := runScan(client, config); err != nil {
 		fmt.Fprintf(os.Stderr, "Scan failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runSearchCommand handles the "search" subcommand
+func runSearchCommand(args []string) {
+	searchConfig := parseSearchFlags(args)
+
+	if err := validateSearchConfig(searchConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("GitLab Content Search\n")
+	fmt.Printf("=====================\n\n")
+	fmt.Printf("Searching: %s\n", searchConfig.GitLabURL)
+	fmt.Printf("Search term: %q\n", searchConfig.SearchTerm)
+	if searchConfig.IsRegex {
+		fmt.Printf("Mode: regex\n")
+	}
+	if len(searchConfig.FilePatterns) > 0 {
+		fmt.Printf("File patterns: %s\n", strings.Join(searchConfig.FilePatterns, ", "))
+	}
+	if searchConfig.LogFile != "" {
+		fmt.Printf("Logging to: %s\n", searchConfig.LogFile)
+	}
+	fmt.Println()
+
+	client, err := createClient(searchConfig.GitLabURL, searchConfig.Token, searchConfig.Timeout)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating GitLab client: %v\n", err)
+		os.Exit(1)
+	}
+
+	printClientInfo(client)
+
+	if err := runContentSearch(client, searchConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "Search failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// createClient creates and tests a GitLab client connection
+func createClient(gitlabURL, token string, timeout int) (*gitlab.Client, error) {
+	gitlabConfig := &gitlab.Config{
+		GitLabURL: gitlabURL,
+		Token:     token,
+		Timeout:   time.Duration(timeout) * time.Second,
+	}
+
+	client, err := gitlab.NewClient(gitlabConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println("Testing GitLab connection...")
+	if err := client.TestConnection(); err != nil {
+		return nil, err
+	}
+	fmt.Println("✓ Successfully connected to GitLab")
+	fmt.Println()
+
+	return client, nil
+}
+
+// printClientInfo prints the client connection details
+func printClientInfo(client *gitlab.Client) {
+	fmt.Printf("GitLab Base URL: %s\n", client.GetBaseURL())
+	fmt.Printf("Organization: %s\n", client.GetOrganization())
+	fmt.Println()
+}
+
+// runContentSearch orchestrates the content search process
+func runContentSearch(client *gitlab.Client, config *SearchConfig) error {
+	ctx := context.Background()
+
+	fmt.Println("Fetching projects...")
+	projects, err := client.ListAllProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list projects: %w", err)
+	}
+
+	if len(projects) == 0 {
+		fmt.Println("No projects found")
+		return nil
+	}
+
+	streamer := output.NewConsoleStreamer()
+	stats := output.NewContentScanStatistics()
+
+	var logger *output.FileLogger
+	if config.LogFile != "" {
+		logger, err = output.NewFileLogger(config.LogFile, output.FormatJSON)
+		if err != nil {
+			return fmt.Errorf("failed to create log file: %w", err)
+		}
+		defer logger.Close()
+	}
+
+	if err := streamer.PrintContentHeader(config.GitLabURL, len(projects), config.SearchTerm); err != nil {
+		return fmt.Errorf("failed to print header: %w", err)
+	}
+
+	contentScanner := scanner.NewContentScanner(client, scanner.ContentSearchConfig{
+		SearchTerm:    config.SearchTerm,
+		IsRegex:       config.IsRegex,
+		FilePatterns:  config.FilePatterns,
+		CaseSensitive: config.CaseSensitive,
+		ContextLines:  config.ContextLines,
+	})
+
+	semaphore := make(chan struct{}, config.Concurrency)
+	var wg sync.WaitGroup
+
+	for i, project := range projects {
+		wg.Add(1)
+		go func(index int, proj *gitlab.Project) {
+			defer wg.Done()
+
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			result := contentScanner.ScanProject(ctx, proj, index+1, len(projects))
+
+			stats.RecordResult(result)
+
+			if err := streamer.StreamContentResult(result); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to stream result: %v\n", err)
+			}
+
+			if logger != nil {
+				if err := logger.LogContentResult(result); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to log result: %v\n", err)
+				}
+			}
+		}(i, project)
+	}
+
+	wg.Wait()
+
+	if err := streamer.PrintContentSummary(stats); err != nil {
+		return fmt.Errorf("failed to print summary: %w", err)
+	}
+
+	return nil
 }
 
 // runScan orchestrates the scanning process
@@ -218,26 +378,58 @@ func scanProject(ctx context.Context, client *gitlab.Client, registry *rules.Reg
 	return result
 }
 
-func parseFlags() *Config {
+func parseScanFlags(args []string) *Config {
 	config := &Config{}
 
-	flag.StringVar(&config.GitLabURL, "url", "", "GitLab URL including org/group (e.g., gitlab.com/myorg)")
-	flag.StringVar(&config.Token, "token", os.Getenv("GITLAB_TOKEN"), "GitLab API token (or set GITLAB_TOKEN env var)")
-	flag.StringVar(&config.LogFile, "log", "", "Path to log file (optional)")
-	flag.IntVar(&config.Concurrency, "concurrency", 5, "Number of concurrent scans")
-	flag.IntVar(&config.Timeout, "timeout", 30, "API timeout in seconds")
+	fs := flag.NewFlagSet("scan", flag.ExitOnError)
+	fs.StringVar(&config.GitLabURL, "url", "", "GitLab URL including org/group (e.g., gitlab.com/myorg)")
+	fs.StringVar(&config.Token, "token", os.Getenv("GITLAB_TOKEN"), "GitLab API token (or set GITLAB_TOKEN env var)")
+	fs.StringVar(&config.LogFile, "log", "", "Path to log file (optional)")
+	fs.IntVar(&config.Concurrency, "concurrency", 5, "Number of concurrent scans")
+	fs.IntVar(&config.Timeout, "timeout", 30, "API timeout in seconds")
 
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\n", os.Args[0])
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [scan] [options]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Scan GitLab projects to detect Python versions.\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
+		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExample:\n")
 		fmt.Fprintf(os.Stderr, "  %s --url gitlab.com/myorg --token abc123\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "  %s --url gitlab.com/myorg --token abc123 --log results.log\n", os.Args[0])
 	}
 
-	flag.Parse()
+	fs.Parse(args)
+	return config
+}
+
+func parseSearchFlags(args []string) *SearchConfig {
+	config := &SearchConfig{}
+	var filePatterns multiFlag
+
+	fs := flag.NewFlagSet("search", flag.ExitOnError)
+	fs.StringVar(&config.GitLabURL, "url", "", "GitLab URL including org/group (e.g., gitlab.com/myorg)")
+	fs.StringVar(&config.Token, "token", os.Getenv("GITLAB_TOKEN"), "GitLab API token (or set GITLAB_TOKEN env var)")
+	fs.StringVar(&config.LogFile, "log", "", "Path to log file (optional)")
+	fs.IntVar(&config.Concurrency, "concurrency", 5, "Number of concurrent searches")
+	fs.IntVar(&config.Timeout, "timeout", 30, "API timeout in seconds")
+	fs.StringVar(&config.SearchTerm, "search", "", "String or pattern to search for (required)")
+	fs.BoolVar(&config.IsRegex, "regex", false, "Treat search term as a regex pattern")
+	fs.Var(&filePatterns, "file", "Filename glob pattern to restrict search (repeatable, e.g., --file '*.py')")
+	fs.BoolVar(&config.CaseSensitive, "case-sensitive", false, "Enable case-sensitive search (default: case-insensitive)")
+	fs.IntVar(&config.ContextLines, "context", 0, "Lines of context around each match")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s search [options]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Search for strings across all GitLab projects in an organization.\n\n")
+		fmt.Fprintf(os.Stderr, "Options:\n")
+		fs.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  %s search --url gitlab.com/myorg --token abc123 --search \"API_KEY\"\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s search --url gitlab.com/myorg --token abc123 --search \"password\\s*=\" --regex --file \"*.py\"\n", os.Args[0])
+	}
+
+	fs.Parse(args)
+	config.FilePatterns = filePatterns
 	return config
 }
 
@@ -247,6 +439,19 @@ func validateConfig(config *Config) error {
 	}
 	if config.Token == "" {
 		return fmt.Errorf("--token is required (or set GITLAB_TOKEN environment variable)")
+	}
+	return nil
+}
+
+func validateSearchConfig(config *SearchConfig) error {
+	if config.GitLabURL == "" {
+		return fmt.Errorf("--url is required")
+	}
+	if config.Token == "" {
+		return fmt.Errorf("--token is required (or set GITLAB_TOKEN environment variable)")
+	}
+	if config.SearchTerm == "" {
+		return fmt.Errorf("--search is required")
 	}
 	return nil
 }

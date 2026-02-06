@@ -289,6 +289,9 @@ func (c *Client) ListProjects(ctx context.Context, opts *ListProjectsOptions) ([
 		},
 	}
 
+	// Determine which API to use based on whether organization is specified
+	isGroupScan := c.organization != ""
+
 	// Paginate through all projects
 	for {
 		var gitlabProjects []*gitlab.Project
@@ -300,7 +303,27 @@ func (c *Client) ListProjects(ctx context.Context, opts *ListProjectsOptions) ([
 		
 		// Fetch one page with retry logic
 		err := apperrors.RetryWithBackoff(pageCtx, retryConfig, func() error {
-			projects, response, err := c.client.Groups.ListGroupProjects(c.organization, listOptions, gitlab.WithContext(pageCtx))
+			var projects []*gitlab.Project
+			var response *gitlab.Response
+			var err error
+
+			if isGroupScan {
+				// List projects in specific group/organization
+				projects, response, err = c.client.Groups.ListGroupProjects(c.organization, listOptions, gitlab.WithContext(pageCtx))
+			} else {
+				// List all projects user has access to (self-hosted without group)
+				userListOptions := &gitlab.ListProjectsOptions{
+					ListOptions: gitlab.ListOptions{
+						PerPage: perPage,
+						Page:    listOptions.Page,
+					},
+				}
+				if opts.Archived != nil {
+					userListOptions.Archived = opts.Archived
+				}
+				projects, response, err = c.client.Projects.ListProjects(userListOptions, gitlab.WithContext(pageCtx))
+			}
+
 			if err != nil {
 				lastErr = classifyGitLabError(err, response)
 				return lastErr

@@ -55,11 +55,11 @@ func TestParseGitLabURL(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name:        "No organization path",
+			name:        "No organization path (self-hosted)",
 			input:       "gitlab.com",
-			wantBaseURL: "",
+			wantBaseURL: "https://gitlab.com",
 			wantOrg:     "",
-			wantErr:     true,
+			wantErr:     false,
 		},
 		{
 			name:        "HTTP scheme",
@@ -121,13 +121,13 @@ func TestNewClient(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Invalid URL format",
+			name: "Self-hosted without organization",
 			config: &Config{
-				GitLabURL: "gitlab.com",
+				GitLabURL: "gitlab.company.com",
 				Token:     "test-token",
 				Timeout:   30 * time.Second,
 			},
-			wantErr: true,
+			wantErr: false,
 		},
 		{
 			name: "Valid config",
@@ -153,7 +153,8 @@ func TestNewClient(t *testing.T) {
 				t.Error("NewClient() returned nil client without error")
 			}
 
-			if !tt.wantErr {
+			// Only check specific values for "Valid config" test with org
+			if !tt.wantErr && tt.name == "Valid config" {
 				if client.GetOrganization() != "myorg" {
 					t.Errorf("GetOrganization() = %v, want myorg", client.GetOrganization())
 				}
@@ -162,6 +163,13 @@ func TestNewClient(t *testing.T) {
 				}
 				if client.GetTimeout() != 30*time.Second {
 					t.Errorf("GetTimeout() = %v, want 30s", client.GetTimeout())
+				}
+			}
+			
+			// For self-hosted without org, check empty organization
+			if !tt.wantErr && tt.name == "Self-hosted without organization" {
+				if client.GetOrganization() != "" {
+					t.Errorf("GetOrganization() = %v, want empty string", client.GetOrganization())
 				}
 			}
 		})

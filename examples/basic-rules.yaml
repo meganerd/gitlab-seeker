@@ -1,0 +1,101 @@
+# Basic Python Version Detection Rules
+# This configuration defines the most common Python version detection rules
+
+version: "1.0"
+
+settings:
+  # Enable all rules by default
+  default_enabled: true
+  # Default priority for rules without explicit priority
+  default_priority: 50
+
+rules:
+  # Explicit version files (highest priority)
+  - name: python-version-file
+    description: Parse .python-version file (used by pyenv, asdf, etc.)
+    priority: 10
+    enabled: true
+    tags:
+      - explicit
+      - version-file
+    match:
+      file_pattern: ".python-version"
+      max_file_size: 1024
+    parser:
+      type: simple_version
+      config:
+        confidence: 1.0
+        trim_whitespace: true
+
+  # Project configuration files
+  - name: pyproject-toml
+    description: Parse pyproject.toml for Python version requirements
+    priority: 20
+    enabled: true
+    tags:
+      - config-file
+      - poetry
+      - pep621
+    match:
+      file_pattern: "pyproject.toml"
+      required_content: "\\[tool\\.poetry\\]|\\[project\\]"
+      max_file_size: 10485760  # 10MB
+    parser:
+      type: pyproject_toml
+
+  # Setup files
+  - name: setup-py-python-requires
+    description: Extract python_requires from setup.py
+    priority: 30
+    enabled: true
+    tags:
+      - config-file
+      - setuptools
+    match:
+      file_pattern: "setup.py"
+      required_content: "python_requires"
+      max_file_size: 1048576  # 1MB
+    parser:
+      type: regex
+      config:
+        pattern: 'python_requires\s*=\s*[''"]>=?\s*(?P<version>\d+\.\d+(?:\.\d+)?)[''"]'
+        version_group: version
+        confidence: 0.8
+
+  # Requirements files with version hints
+  - name: requirements-txt-python-comment
+    description: Look for Python version in comments in requirements.txt
+    priority: 40
+    enabled: true
+    tags:
+      - requirements
+      - comment
+    match:
+      file_pattern: "requirements*.txt"
+      required_content: "# [Pp]ython"
+      max_file_size: 1048576  # 1MB
+    parser:
+      type: regex
+      config:
+        pattern: '#\s*[Pp]ython\s*(?:version|requires)?:?\s*(?P<version>\d+\.\d+(?:\.\d+)?)'
+        version_group: version
+        confidence: 0.6
+
+  # Docker files
+  - name: dockerfile-python-base
+    description: Extract Python version from Dockerfile base image
+    priority: 50
+    enabled: true
+    tags:
+      - docker
+      - container
+    match:
+      file_pattern: "Dockerfile*"
+      required_content: "FROM.*python"
+      max_file_size: 1048576  # 1MB
+    parser:
+      type: regex
+      config:
+        pattern: 'FROM\s+python:(?P<version>\d+\.\d+(?:\.\d+)?)'
+        version_group: version
+        confidence: 0.7

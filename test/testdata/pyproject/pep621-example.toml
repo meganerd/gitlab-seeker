@@ -1,0 +1,34 @@
+# Example: PEP 621 / PDM project
+[project]
+name = "example-pep621-project"
+version = "1.0.0"
+description = "A sample PEP 621 compliant project"
+authors = [
+    {name = "Developer", email = "dev@example.com"}
+]
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "httpx>=0.24.0",
+    "click>=8.1.0",
+    "pydantic>=2.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+]
+
+[project.scripts]
+mycli = "myproject.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

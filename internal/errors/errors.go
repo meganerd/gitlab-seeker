@@ -147,14 +147,45 @@ func ClassifyError(err error) *AppError {
 		return NewNetworkError(err)
 	}
 
+	// Check for DNS errors (part of net package)
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		if dnsErr.IsTimeout {
+			return NewTimeoutError(err)
+		}
+		// DNS errors are typically temporary and retryable
+		return NewNetworkError(err)
+	}
+
+	// Check for OpError (wraps many network errors)
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if opErr.Timeout() {
+			return NewTimeoutError(err)
+		}
+		// Check the underlying error in OpError
+		if opErr.Err != nil {
+			return ClassifyError(opErr.Err)
+		}
+		return NewNetworkError(err)
+	}
+
 	// Check for syscall errors (connection refused, etc.)
 	var syscallErr syscall.Errno
 	if errors.As(err, &syscallErr) {
 		switch syscallErr {
-		case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ENETUNREACH, syscall.EHOSTUNREACH:
+		case syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ECONNABORTED:
+			return NewNetworkError(err)
+		case syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.EHOSTDOWN:
 			return NewNetworkError(err)
 		case syscall.ETIMEDOUT:
 			return NewTimeoutError(err)
+		case syscall.EPIPE:
+			// Broken pipe - connection lost during write
+			return NewNetworkError(err)
+		case syscall.ENOTCONN:
+			// Socket not connected
+			return NewNetworkError(err)
 		}
 	}
 

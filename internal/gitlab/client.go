@@ -75,6 +75,7 @@ func NewClient(config *Config) (*Client, error) {
 //   - "gitlab.com/myorg" -> "https://gitlab.com", "myorg"
 //   - "https://gitlab.com/myorg" -> "https://gitlab.com", "myorg"
 //   - "gitlab.example.com/group/subgroup" -> "https://gitlab.example.com", "group/subgroup"
+//   - "gitlab.example.com" -> "https://gitlab.example.com", "" (self-hosted, scan all projects)
 func parseGitLabURL(gitlabURL string) (baseURL, organization string, err error) {
 	// Ensure the URL has a scheme
 	if !strings.HasPrefix(gitlabURL, "http://") && !strings.HasPrefix(gitlabURL, "https://") {
@@ -93,10 +94,7 @@ func parseGitLabURL(gitlabURL string) (baseURL, organization string, err error) 
 	// Extract the organization/group from the path
 	// Remove leading/trailing slashes
 	path := strings.Trim(parsedURL.Path, "/")
-	if path == "" {
-		return "", "", fmt.Errorf("organization/group path is missing from URL")
-	}
-
+	// Organization is optional for self-hosted instances
 	organization = path
 
 	return baseURL, organization, nil

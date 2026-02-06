@@ -1,12 +1,17 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gbjohnso/gitlab-python-scanner/internal/gitlab"
+	"github.com/gbjohnso/gitlab-python-scanner/internal/output"
+	"github.com/gbjohnso/gitlab-python-scanner/internal/parsers"
+	"github.com/gbjohnso/gitlab-python-scanner/internal/rules"
 )
 
 // Config holds the application configuration
@@ -63,8 +68,154 @@ func main() {
 	fmt.Println("✓ Successfully connected to GitLab")
 	fmt.Println()
 
-	// TODO: Implement scanning logic
-	fmt.Println("Scanning not yet implemented - see tasks with: bd ready")
+	// Run the scan
+	if err := runScan(client, config); err != nil {
+		fmt.Fprintf(os.Stderr, "Scan failed: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runScan orchestrates the scanning process
+func runScan(client *gitlab.Client, config *Config) error {
+	ctx := context.Background()
+
+	// List all projects
+	fmt.Println("Fetching projects...")
+	projects, err := client.ListAllProjects(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list projects: %w", err)
+	}
+
+	if len(projects) == 0 {
+		fmt.Println("No projects found")
+		return nil
+	}
+
+	// Initialize output handlers
+	streamer := output.NewConsoleStreamer()
+	stats := output.NewScanStatistics()
+
+	var logger *output.FileLogger
+	if config.LogFile != "" {
+		logger, err = output.NewFileLogger(config.LogFile, output.FormatJSON)
+		if err != nil {
+			return fmt.Errorf("failed to create log file: %w", err)
+		}
+		defer logger.Close()
+
+		if err := logger.WriteHeader(config.GitLabURL, len(projects)); err != nil {
+			return fmt.Errorf("failed to write log header: %w", err)
+		}
+	}
+
+	// Print header
+	if err := streamer.PrintHeader(config.GitLabURL, len(projects)); err != nil {
+		return fmt.Errorf("failed to print header: %w", err)
+	}
+
+	// Create rule registry for Python version detection
+	registry := parsers.DefaultRegistry()
+
+	// Set up concurrency control
+	semaphore := make(chan struct{}, config.Concurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	// Scan each project concurrently
+	for i, project := range projects {
+		wg.Add(1)
+		go func(index int, proj *gitlab.Project) {
+			defer wg.Done()
+
+			// Acquire semaphore
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			// Scan the project
+			result := scanProject(ctx, client, registry, proj, index+1, len(projects))
+
+			// Thread-safe result recording
+			mu.Lock()
+			stats.RecordResult(result)
+			mu.Unlock()
+
+			// Stream result to console
+			if err := streamer.StreamResult(result); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: failed to stream result: %v\n", err)
+			}
+
+			// Log result to file if logger is configured
+			if logger != nil {
+				if err := logger.LogResult(result); err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: failed to log result: %v\n", err)
+				}
+			}
+		}(i, project)
+	}
+
+	// Wait for all scans to complete
+	wg.Wait()
+
+	// Print summary
+	if err := streamer.PrintSummary(stats); err != nil {
+		return fmt.Errorf("failed to print summary: %w", err)
+	}
+
+	// Write summary to log
+	if logger != nil {
+		if err := logger.WriteSummary(stats); err != nil {
+			return fmt.Errorf("failed to write log summary: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// scanProject scans a single project for Python version information
+func scanProject(ctx context.Context, client *gitlab.Client, registry *rules.Registry, project *gitlab.Project, index, total int) *output.ScanResult {
+	result := &output.ScanResult{
+		ProjectName:   project.Name,
+		ProjectPath:   project.PathWithNamespace,
+		Index:         index,
+		TotalProjects: total,
+	}
+
+	// Get all enabled rules to determine which files to check
+	enabledRules := registry.ListEnabled()
+	if len(enabledRules) == 0 {
+		result.Error = fmt.Errorf("no enabled rules found")
+		return result
+	}
+
+	// Try each rule's file pattern until we find a match
+	// Rules are already sorted by priority (highest first)
+	for _, rule := range enabledRules {
+		filename := rule.Condition.FilePattern
+
+		// Try to fetch the file from the project
+		content, err := client.GetRawFile(ctx, project.ID, filename, nil)
+		if err != nil {
+			// File not found or other error - try next rule
+			continue
+		}
+
+		// Apply the rule to parse the file content
+		searchResult, err := rule.Apply(ctx, content, filename)
+		if err != nil {
+			// Parse error - try next rule
+			continue
+		}
+
+		// Check if we found a Python version
+		if searchResult != nil && searchResult.Found && searchResult.Version != "" {
+			result.PythonVersion = searchResult.Version
+			result.DetectionSource = searchResult.Source
+			return result
+		}
+	}
+
+	// No Python version found
+	return result
 }
 
 func parseFlags() *Config {
